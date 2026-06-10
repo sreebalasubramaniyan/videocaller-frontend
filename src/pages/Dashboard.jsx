@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { getRooms, createRoom, joinRoom } from '../services/api';
+import { getRooms, createRoom, joinRoom, deleteRoom } from '../services/api';
 
 const Dashboard = () => {
   const { user, logout } = useAuth();
@@ -66,6 +66,22 @@ const Dashboard = () => {
     }
   };
 
+  const handleEndRoom = async (e, roomId) => {
+    e.stopPropagation();
+    try {
+      await deleteRoom(roomId);
+      // Remove the room from the list
+      setRooms(rooms.filter((room) => room.roomId !== roomId));
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to end room');
+    }
+  };
+
+  // Check if current user is the creator
+  const isRoomCreator = (createdBy) => {
+    return user?.username === createdBy;
+  };
+
   return (
     <div className="dashboard">
       <nav className="navbar">
@@ -97,9 +113,19 @@ const Dashboard = () => {
                 <h3>{room.roomName}</h3>
                 <p>Created by: {room.createdBy}</p>
                 <p>Participants: {room.participantCount}</p>
-                <button onClick={() => handleJoinClick(room)} className="join-btn">
-                  Join Room
-                </button>
+                <div className="room-actions">
+                  <button onClick={() => handleJoinClick(room)} className="join-btn">
+                    Join Room
+                  </button>
+                  {isRoomCreator(room.createdBy) && (
+                    <button
+                      onClick={(e) => handleEndRoom(e, room.roomId)}
+                      className="end-btn"
+                    >
+                      End Room
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>

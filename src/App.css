@@ -208,6 +208,28 @@ body {
   background: #d6304a;
 }
 
+/* Room Actions */
+.room-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.end-btn {
+  width: 100%;
+  padding: 10px;
+  background: #ff4757;
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.end-btn:hover {
+  background: #ff6b7a;
+}
+
 /* Modal */
 .modal {
   position: fixed;
