@@ -63,4 +63,9 @@ export const deleteRoom = async (roomId) => {
   return response.data;
 };
 
+export const kickUser = async (roomId, userId) => {
+  const response = await api.post(`/rooms/kick/${roomId}`, { userId });
+  return response.data;
+};
+
 export default api;

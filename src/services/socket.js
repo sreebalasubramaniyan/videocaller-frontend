@@ -44,4 +44,23 @@ export const leaveRoomSocket = (roomId) => {
   }
 };
 
+// Host controls
+export const kickUserSocket = (roomId, userId) => {
+  if (socket.connected) {
+    socket.emit('kick-user', { roomId, userId });
+  }
+};
+
+export const muteUserSocket = (roomId, userId, isMuted) => {
+  if (socket.connected) {
+    socket.emit('mute-user', { roomId, userId, isMuted });
+  }
+};
+
+export const disableVideoSocket = (roomId, userId, isDisabled) => {
+  if (socket.connected) {
+    socket.emit('disable-video', { roomId, userId, isDisabled });
+  }
+};
+
 export default socket;

@@ -322,6 +322,15 @@ body {
   color: #e94560;
 }
 
+.meeting-timer {
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: #fff;
+  background: #e94560;
+  padding: 8px 16px;
+  border-radius: 5px;
+}
+
 .leave-btn {
   padding: 10px 20px;
   background: #ff4757;
@@ -331,13 +340,36 @@ body {
   cursor: pointer;
 }
 
+/* Video Grid - Better Layout */
 .video-grid {
   flex: 1;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
   gap: 1rem;
   padding: 1rem;
   overflow: auto;
+  align-content: center;
+  justify-content: center;
+}
+
+/* Single participant - large */
+.video-grid:has(.video-container:only-child) {
+  grid-template-columns: 1fr;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+/* Two participants - side by side */
+.video-grid:has(.video-container:nth-child(2):last-child) {
+  grid-template-columns: repeat(2, 1fr);
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+/* 3+ participants - grid */
+.video-grid:not(:has(.video-container:only-child)):not(:has(.video-container:nth-child(2):last-child)) {
+  grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+  max-width: 1600px;
+  margin: 0 auto;
 }
 
 .video-container {
@@ -346,6 +378,18 @@ body {
   border-radius: 10px;
   overflow: hidden;
   aspect-ratio: 16/9;
+  min-height: 300px;
+}
+
+/* Single user - bigger */
+.video-grid:has(.video-container:only-child) .video-container {
+  aspect-ratio: 16/9;
+  max-height: 70vh;
+}
+
+/* Two users */
+.video-grid:has(.video-container:nth-child(2):last-child) .video-container {
+  aspect-ratio: 16/10;
 }
 
 .video-container video {
@@ -358,14 +402,62 @@ body {
   transform: scaleX(-1);
 }
 
-.participant-name {
+.participant-info {
   position: absolute;
   bottom: 10px;
   left: 10px;
+  right: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.participant-name {
   background: rgba(0, 0, 0, 0.7);
   padding: 5px 10px;
   border-radius: 5px;
   font-size: 0.9rem;
+}
+
+.muted-badge,
+.video-badge {
+  background: #ff4757;
+  color: #fff;
+  padding: 3px 8px;
+  border-radius: 3px;
+  font-size: 0.75rem;
+}
+
+/* Host Controls */
+.host-controls {
+  display: flex;
+  gap: 5px;
+}
+
+.kick-btn {
+  background: #ff4757;
+  color: #fff;
+  border: none;
+  padding: 5px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.75rem;
+}
+
+.control-small {
+  background: #e94560;
+  color: #fff;
+  border: none;
+  padding: 5px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.75rem;
+}
+
+.control-small:hover {
+  background: #d6304a;
 }
 
 .video-controls {
