@@ -416,13 +416,30 @@ body {
 
 .participant-name {
   background: rgba(0, 0, 0, 0.7);
-  padding: 5px 10px;
+  padding: 5px 12px;
   border-radius: 5px;
-  font-size: 0.9rem;
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.host-badge {
+  background: #e94560;
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  margin-left: 8px;
+}
+
+.status-badges {
+  display: flex;
+  gap: 5px;
 }
 
 .muted-badge,
-.video-badge {
+.video-badge,
+.self-muted-badge,
+.self-video-badge {
   background: #ff4757;
   color: #fff;
   padding: 3px 8px;
@@ -430,33 +447,71 @@ body {
   font-size: 0.75rem;
 }
 
-/* Host Controls */
+.self-muted-badge,
+.self-video-badge {
+  background: #666;
+}
+
+/* Host Controls - Improved */
 .host-controls {
   display: flex;
-  gap: 5px;
+  gap: 8px;
 }
 
-.kick-btn {
+.kick-btn,
+.mute-btn,
+.video-off-btn {
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  border: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.kick-btn:hover {
   background: #ff4757;
-  color: #fff;
-  border: none;
-  padding: 5px 10px;
-  border-radius: 3px;
-  cursor: pointer;
-  font-size: 0.75rem;
+  transform: scale(1.1);
 }
 
-.control-small {
+.mute-btn:hover {
   background: #e94560;
-  color: #fff;
-  border: none;
-  padding: 5px 10px;
-  border-radius: 3px;
-  cursor: pointer;
-  font-size: 0.75rem;
+  transform: scale(1.1);
 }
 
-.control-small:hover {
+.video-off-btn:hover {
+  background: #e94560;
+  transform: scale(1.1);
+}
+
+/* Timer */
+.meeting-timer {
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, #e94560 0%, #0f3460 100%);
+  padding: 8px 20px;
+  border-radius: 25px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.timer-label {
+  font-size: 0.9rem;
+  opacity: 0.9;
+}
+
+.timer-display {
+  font-family: 'Courier New', monospace;
+  font-size: 1.3rem;
+}
   background: #d6304a;
 }
 
@@ -484,6 +539,47 @@ body {
 
 .control-btn.disabled {
   background: #666;
+}
+
+/* Toggle Button Style */
+.control-btn.toggle-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 20px;
+  border-radius: 12px;
+  min-width: 100px;
+}
+
+.control-btn.toggle-btn .toggle-icon {
+  font-size: 1.5rem;
+}
+
+.control-btn.toggle-btn .toggle-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.control-btn.toggle-btn.active {
+  background: #27ae60;
+}
+
+.control-btn.toggle-btn.active:hover {
+  background: #2ecc71;
+}
+
+.control-btn.toggle-btn.inactive {
+  background: #e74c3c;
+}
+
+.control-btn.toggle-btn.inactive:hover {
+  background: #c0392b;
+}
+
+.control-btn.toggle-btn:disabled {
+  background: #7f8c8d;
+  cursor: not-allowed;
 }
 
 .control-btn.leave {

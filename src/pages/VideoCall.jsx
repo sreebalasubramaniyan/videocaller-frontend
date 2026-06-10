@@ -12,19 +12,18 @@ const VideoCall = () => {
 
   const [room, setRoom] = useState(null);
   const [remoteStreams, setRemoteStreams] = useState({});
-  const [participants, setParticipants] = useState([]);
+  const [remoteUsers, setRemoteUsers] = useState({});
   const [isAudioEnabled, setIsAudioEnabled] = useState(true);
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
   const [isMutedByHost, setIsMutedByHost] = useState(false);
   const [isVideoDisabledByHost, setIsVideoDisabledByHost] = useState(false);
-  const [meetingTime, setMeetingTime] = useState(0);
+  const [meetingStartTime, setMeetingStartTime] = useState(null);
   const [error, setError] = useState('');
 
   const localVideoRef = useRef(null);
   const peerConnections = useRef({});
   const localStream = useRef(null);
   const remoteVideoRefs = useRef({});
-  const timerRef = useRef(null);
 
   const password = location.state?.password;
 
@@ -68,21 +67,6 @@ const VideoCall = () => {
     };
   }, []);
 
-  // Timer effect
-  useEffect(() => {
-    if (room) {
-      timerRef.current = setInterval(() => {
-        setMeetingTime(prev => prev + 1);
-      }, 1000);
-    }
-
-    return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
-    };
-  }, [room]);
-
   // Apply host mute/video controls
   useEffect(() => {
     if (localStream.current) {
@@ -99,10 +83,10 @@ const VideoCall = () => {
     try {
       const response = await getRoom(roomId);
       setRoom(response.room);
-      setParticipants([{ id: user.id, username: user.username, socketId: socket.id }]);
+      setMeetingStartTime(new Date(response.room.meetingStartTime));
 
       await startLocalStream();
-      joinRoomSocket(roomId, user.id);
+      joinRoomSocket(roomId, user.id, user.username);
     } catch (err) {
       setError('Failed to join room. Wrong password or room not found.');
       setTimeout(() => navigate('/dashboard'), 2000);
@@ -125,8 +109,14 @@ const VideoCall = () => {
     }
   };
 
-  const handleUserConnected = async ({ userId }) => {
-    console.log('User connected:', userId);
+  const handleUserConnected = async ({ userId, username }) => {
+    console.log('User connected:', userId, username);
+
+    // Store username
+    setRemoteUsers(prev => ({
+      ...prev,
+      [userId]: { username }
+    }));
 
     if (peerConnections.current[userId]) {
       return;
@@ -159,7 +149,11 @@ const VideoCall = () => {
       return newStreams;
     });
 
-    setParticipants(prev => prev.filter(p => p.socketId !== userId));
+    setRemoteUsers(prev => {
+      const newUsers = { ...prev };
+      delete newUsers[userId];
+      return newUsers;
+    });
   };
 
   const handleKicked = ({ roomId }) => {
@@ -169,11 +163,15 @@ const VideoCall = () => {
   };
 
   const handleUserKicked = ({ userId }) => {
-    // Remove kicked user's stream
     setRemoteStreams((prev) => {
       const newStreams = { ...prev };
       delete newStreams[userId];
       return newStreams;
+    });
+    setRemoteUsers(prev => {
+      const newUsers = { ...prev };
+      delete newUsers[userId];
+      return newUsers;
     });
   };
 
@@ -218,7 +216,7 @@ const VideoCall = () => {
     return pc;
   };
 
-  const handleOffer = async ({ from, offer }) => {
+  const handleOffer = async ({ from, offer, username }) => {
     console.log('Received offer from:', from);
 
     const peerConnection = createPeerConnection(from);
@@ -233,7 +231,7 @@ const VideoCall = () => {
 
     const answer = await peerConnection.createAnswer();
     await peerConnection.setLocalDescription(answer);
-    socket.emit('answer', { to: from, answer });
+    socket.emit('answer', { to: from, answer, username: user.username });
   };
 
   const handleAnswer = async ({ from, answer }) => {
@@ -270,21 +268,24 @@ const VideoCall = () => {
   };
 
   // Host functions
-  const handleKickUser = async (userId) => {
+  const handleKickUser = async (socketId) => {
     try {
-      await kickUser(roomId, userId);
-      kickUserSocket(roomId, userId);
+      const userId = remoteUsers[socketId]?._id;
+      if (userId) {
+        await kickUser(roomId, userId);
+      }
+      kickUserSocket(roomId, socketId);
     } catch (err) {
       console.error('Failed to kick user:', err);
     }
   };
 
-  const handleMuteUser = (userId, isMuted) => {
-    muteUserSocket(roomId, userId, isMuted);
+  const handleMuteUser = (socketId, isMuted) => {
+    muteUserSocket(roomId, socketId, isMuted);
   };
 
-  const handleDisableVideo = (userId, isDisabled) => {
-    disableVideoSocket(roomId, userId, isDisabled);
+  const handleDisableVideo = (socketId, isDisabled) => {
+    disableVideoSocket(roomId, socketId, isDisabled);
   };
 
   const leaveCall = async () => {
@@ -304,29 +305,52 @@ const VideoCall = () => {
     }
     Object.values(peerConnections.current).forEach((pc) => pc.close());
     peerConnections.current = {};
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-    }
-  };
-
-  // Format time
-  const formatTime = (seconds) => {
-    const hrs = Math.floor(seconds / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-    if (hrs > 0) {
-      return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-    }
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
   const remoteUserIds = Object.keys(remoteStreams);
+
+  // Meeting timer component
+  const MeetingTimer = ({ startTime }) => {
+    const [elapsed, setElapsed] = useState(0);
+
+    useEffect(() => {
+      if (!startTime) return;
+
+      const calculateElapsed = () => {
+        const now = new Date();
+        const start = new Date(startTime);
+        return Math.floor((now - start) / 1000);
+      };
+
+      setElapsed(calculateElapsed());
+      const interval = setInterval(() => {
+        setElapsed(calculateElapsed());
+      }, 1000);
+
+      return () => clearInterval(interval);
+    }, [startTime]);
+
+    const formatTime = (seconds) => {
+      const hrs = Math.floor(seconds / 3600);
+      const mins = Math.floor((seconds % 3600) / 60);
+      const secs = seconds % 60;
+      if (hrs > 0) {
+        return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+      }
+      return `${mins}:${secs.toString().padStart(2, '0')}`;
+    };
+
+    return <span className="timer-display">{formatTime(elapsed)}</span>;
+  };
 
   return (
     <div className="video-call">
       <div className="video-header">
         <h2>{room?.roomName}</h2>
-        <div className="meeting-timer">{formatTime(meetingTime)}</div>
+        <div className="meeting-timer">
+          <span className="timer-label">Meeting Time: </span>
+          <MeetingTimer startTime={meetingStartTime} />
+        </div>
         <button onClick={leaveCall} className="leave-btn">Leave Room</button>
       </div>
 
@@ -336,26 +360,52 @@ const VideoCall = () => {
         <div className="video-container local">
           <video ref={localVideoRef} autoPlay muted playsInline />
           <div className="participant-info">
-            <p className="participant-name">You {isHost && '(Host)'}</p>
-            {isMutedByHost && <span className="muted-badge">Muted by Host</span>}
-            {isVideoDisabledByHost && <span className="video-badge">Video Off by Host</span>}
+            <p className="participant-name">
+              {user?.username} {isHost && <span className="host-badge">Host</span>}
+            </p>
+            <div className="status-badges">
+              {isMutedByHost && <span className="muted-badge">🔇 Muted</span>}
+              {isVideoDisabledByHost && <span className="video-badge">📹 Off</span>}
+              {!isAudioEnabled && !isMutedByHost && <span className="self-muted-badge">🔇</span>}
+              {!isVideoEnabled && !isVideoDisabledByHost && <span className="self-video-badge">📹</span>}
+            </div>
           </div>
         </div>
 
-        {remoteUserIds.map((peerId) => (
-          <div key={peerId} className="video-container">
+        {remoteUserIds.map((socketId) => (
+          <div key={socketId} className="video-container">
             <video
-              ref={(el) => (remoteVideoRefs.current[peerId] = el)}
+              ref={(el) => (remoteVideoRefs.current[socketId] = el)}
               autoPlay
               playsInline
             />
             <div className="participant-info">
-              <p className="participant-name">Participant</p>
+              <p className="participant-name">
+                {remoteUsers[socketId]?.username || `User ${socketId.slice(0, 6)}`}
+              </p>
               {isHost && (
                 <div className="host-controls">
-                  <button onClick={() => handleKickUser(peerId)} className="kick-btn">Kick</button>
-                  <button onClick={() => handleMuteUser(peerId, true)} className="control-small">Mute</button>
-                  <button onClick={() => handleDisableVideo(peerId, true)} className="control-small">Stop Video</button>
+                  <button
+                    onClick={() => handleKickUser(socketId)}
+                    className="kick-btn"
+                    title="Kick user"
+                  >
+                    🚫
+                  </button>
+                  <button
+                    onClick={() => handleMuteUser(socketId, true)}
+                    className="mute-btn"
+                    title="Mute user"
+                  >
+                    🔇
+                  </button>
+                  <button
+                    onClick={() => handleDisableVideo(socketId, true)}
+                    className="video-off-btn"
+                    title="Turn off camera"
+                  >
+                    📹
+                  </button>
                 </div>
               )}
             </div>
@@ -366,15 +416,19 @@ const VideoCall = () => {
       <div className="video-controls">
         <button
           onClick={toggleAudio}
-          className={`control-btn ${!isAudioEnabled || isMutedByHost ? 'disabled' : ''}`}
+          className={`control-btn toggle-btn ${isAudioEnabled && !isMutedByHost ? 'active' : 'inactive'}`}
+          disabled={isMutedByHost}
         >
-          {isAudioEnabled && !isMutedByHost ? '🎤 Mute' : '🔇 Unmute'}
+          <span className="toggle-icon">{isAudioEnabled && !isMutedByHost ? '🎤' : '🔇'}</span>
+          <span className="toggle-label">{isAudioEnabled && !isMutedByHost ? 'Mic On' : 'Mic Off'}</span>
         </button>
         <button
           onClick={toggleVideo}
-          className={`control-btn ${!isVideoEnabled || isVideoDisabledByHost ? 'disabled' : ''}`}
+          className={`control-btn toggle-btn ${isVideoEnabled && !isVideoDisabledByHost ? 'active' : 'inactive'}`}
+          disabled={isVideoDisabledByHost}
         >
-          {isVideoEnabled && !isVideoDisabledByHost ? '📹 Stop Video' : '📹 Start Video'}
+          <span className="toggle-icon">{isVideoEnabled && !isVideoDisabledByHost ? '📹' : '📷'}</span>
+          <span className="toggle-label">{isVideoEnabled && !isVideoDisabledByHost ? 'Video On' : 'Video Off'}</span>
         </button>
         <button onClick={leaveCall} className="control-btn leave">
           📞 Leave

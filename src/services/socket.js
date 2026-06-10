@@ -26,14 +26,14 @@ export const disconnectSocket = () => {
 };
 
 // Socket events
-export const joinRoomSocket = (roomId, userId) => {
+export const joinRoomSocket = (roomId, userId, username) => {
   if (socket.connected) {
-    socket.emit('join-room', { roomId, userId });
-    console.log('Emitted join-room:', roomId, userId);
+    socket.emit('join-room', { roomId, userId, username });
+    console.log('Emitted join-room:', roomId, userId, username);
   } else {
     console.log('Socket not connected, waiting...');
     socket.once('connect', () => {
-      socket.emit('join-room', { roomId, userId });
+      socket.emit('join-room', { roomId, userId, username });
     });
   }
 };
