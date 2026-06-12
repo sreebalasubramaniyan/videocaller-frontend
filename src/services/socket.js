@@ -1,6 +1,8 @@
 import { io } from 'socket.io-client';
 
-const SOCKET_URL = 'https://videocaller-backend.onrender.com';
+const SOCKET_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+  ? 'http://localhost:5000'
+  : 'https://videocaller-backend.onrender.com';
 
 export const socket = io(SOCKET_URL, {
   autoConnect: false,
@@ -60,6 +62,12 @@ export const muteUserSocket = (roomId, userId, isMuted) => {
 export const disableVideoSocket = (roomId, userId, isDisabled) => {
   if (socket.connected) {
     socket.emit('disable-video', { roomId, userId, isDisabled });
+  }
+};
+
+export const sendChatMessageSocket = (roomId, message) => {
+  if (socket.connected) {
+    socket.emit('send-message', { roomId, message });
   }
 };
 

@@ -1,6 +1,14 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { socket, joinRoomSocket, leaveRoomSocket, kickUserSocket, muteUserSocket, disableVideoSocket } from '../services/socket';
+import { 
+  socket, 
+  joinRoomSocket, 
+  leaveRoomSocket, 
+  kickUserSocket, 
+  muteUserSocket, 
+  disableVideoSocket,
+  sendChatMessageSocket
+} from '../services/socket';
 import { getRoom, leaveRoom as leaveRoomApi, kickUser } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
@@ -19,16 +27,30 @@ const VideoCall = () => {
   const [isVideoDisabledByHost, setIsVideoDisabledByHost] = useState(false);
   const [meetingStartTime, setMeetingStartTime] = useState(null);
   const [error, setError] = useState('');
+  
+  // Immersive layout state
+  const [activePanel, setActivePanel] = useState(''); // 'chat' or 'people' or ''
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  
+  // Speaker indicator states
+  const [speakingUsers, setSpeakingUsers] = useState({}); // { [userId]: boolean }
+  const audioAnalysers = useRef({}); // { [userId]: AnalyserNode }
+  const animationFrameId = useRef(null);
 
   const localVideoRef = useRef(null);
   const peerConnections = useRef({});
   const localStream = useRef(null);
+  const screenStreamRef = useRef(null);
   const remoteVideoRefs = useRef({});
+  const chatEndRef = useRef(null);
 
   const password = location.state?.password;
 
   // Check if current user is host
-  const isHost = room?.createdBy?._id === user?.id || room?.createdBy === user?.id;
+  const isHost = room?.createdBy?._id === user?.id || room?.createdBy === user?.id || room?.createdBy === user?.username;
 
   useEffect(() => {
     if (!password) {
@@ -53,6 +75,9 @@ const VideoCall = () => {
     socket.on('remote-mute', handleRemoteMute);
     socket.on('remote-disable-video', handleRemoteDisableVideo);
     socket.on('user-kicked', handleUserKicked);
+    
+    // New chat socket event
+    socket.on('chat-message', handleChatMessage);
 
     return () => {
       socket.off('user-connected');
@@ -64,8 +89,9 @@ const VideoCall = () => {
       socket.off('remote-mute');
       socket.off('remote-disable-video');
       socket.off('user-kicked');
+      socket.off('chat-message');
     };
-  }, []);
+  }, [activePanel]);
 
   // Apply host mute/video controls
   useEffect(() => {
@@ -79,6 +105,34 @@ const VideoCall = () => {
     }
   }, [isMutedByHost, isVideoDisabledByHost, isAudioEnabled, isVideoEnabled]);
 
+  // Scroll chat to bottom when message arrives
+  useEffect(() => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages, activePanel]);
+
+  // Clock tick in controls
+  const [currentTimeStr, setCurrentTimeStr] = useState('');
+  useEffect(() => {
+    const updateTime = () => {
+      const now = new Date();
+      setCurrentTimeStr(now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+    };
+    updateTime();
+    const interval = setInterval(updateTime, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Set up local speaker check
+  useEffect(() => {
+    if (localStream.current && isAudioEnabled && !isMutedByHost) {
+      setupAudioAnalyser('local', localStream.current);
+    } else {
+      removeAudioAnalyser('local');
+    }
+  }, [isAudioEnabled, isMutedByHost, localStream.current]);
+
   const initializeRoom = async () => {
     try {
       const response = await getRoom(roomId);
@@ -87,6 +141,9 @@ const VideoCall = () => {
 
       await startLocalStream();
       joinRoomSocket(roomId, user.id, user.username);
+      
+      // Start audio analysis loop
+      startSpeakingDetection();
     } catch (err) {
       setError('Failed to join room. Wrong password or room not found.');
       setTimeout(() => navigate('/dashboard'), 2000);
@@ -107,6 +164,61 @@ const VideoCall = () => {
       console.error('Error accessing media devices:', err);
       setError('Could not access camera/microphone');
     }
+  };
+
+  // Audio Analyser for speaking indicator
+  const setupAudioAnalyser = (id, stream) => {
+    try {
+      const audioTracks = stream.getAudioTracks();
+      if (audioTracks.length === 0) return;
+
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+
+      const audioCtx = new AudioCtx();
+      const source = audioCtx.createMediaStreamSource(new MediaStream(audioTracks));
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+
+      audioAnalysers.current[id] = analyser;
+    } catch (err) {
+      console.error('Failed to setup audio analyser:', err);
+    }
+  };
+
+  const removeAudioAnalyser = (id) => {
+    delete audioAnalysers.current[id];
+    setSpeakingUsers(prev => {
+      const updated = { ...prev };
+      delete updated[id];
+      return updated;
+    });
+  };
+
+  const startSpeakingDetection = () => {
+    const checkSpeaking = () => {
+      const speaking = {};
+      Object.keys(audioAnalysers.current).forEach(id => {
+        const analyser = audioAnalysers.current[id];
+        const bufferLength = analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+        analyser.getByteFrequencyData(dataArray);
+
+        // Compute average volume
+        let total = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          total += dataArray[i];
+        }
+        const average = total / bufferLength;
+        // Threshold: typical vocal activity on byte frequency is above 15-20
+        speaking[id] = average > 18;
+      });
+
+      setSpeakingUsers(speaking);
+      animationFrameId.current = requestAnimationFrame(checkSpeaking);
+    };
+    animationFrameId.current = requestAnimationFrame(checkSpeaking);
   };
 
   const handleUserConnected = async ({ userId, username }) => {
@@ -154,6 +266,8 @@ const VideoCall = () => {
       delete newUsers[userId];
       return newUsers;
     });
+
+    removeAudioAnalyser(userId);
   };
 
   const handleKicked = ({ roomId }) => {
@@ -173,14 +287,42 @@ const VideoCall = () => {
       delete newUsers[userId];
       return newUsers;
     });
+    removeAudioAnalyser(userId);
   };
 
   const handleRemoteMute = ({ isMuted }) => {
     setIsMutedByHost(isMuted);
+    if (isMuted) {
+      setIsAudioEnabled(false);
+    }
   };
 
   const handleRemoteDisableVideo = ({ isDisabled }) => {
     setIsVideoDisabledByHost(isDisabled);
+    if (isDisabled) {
+      setIsVideoEnabled(false);
+    }
+  };
+
+  const handleChatMessage = (msg) => {
+    setChatMessages(prev => [...prev, msg]);
+    if (activePanel !== 'chat') {
+      setUnreadChatCount(prev => prev + 1);
+    }
+  };
+
+  const handleSendChatMessage = (e) => {
+    e.preventDefault();
+    if (!chatInput.trim()) return;
+
+    sendChatMessageSocket(roomId, chatInput.trim());
+    setChatMessages(prev => [...prev, {
+      sender: user.username,
+      senderId: 'self',
+      message: chatInput.trim(),
+      timestamp: new Date()
+    }]);
+    setChatInput('');
   };
 
   const createPeerConnection = (peerId) => {
@@ -205,6 +347,9 @@ const VideoCall = () => {
         ...prev,
         [peerId]: remoteStream,
       }));
+
+      // Bind remote analyzer
+      setupAudioAnalyser(peerId, remoteStream);
 
       setTimeout(() => {
         if (remoteVideoRefs.current[peerId]) {
@@ -251,23 +396,81 @@ const VideoCall = () => {
 
   const toggleAudio = () => {
     if (localStream.current) {
+      const nextState = !isAudioEnabled;
       localStream.current.getAudioTracks().forEach((track) => {
-        track.enabled = !track.enabled;
+        track.enabled = nextState;
       });
-      setIsAudioEnabled(!isAudioEnabled);
+      setIsAudioEnabled(nextState);
     }
   };
 
   const toggleVideo = () => {
     if (localStream.current) {
+      const nextState = !isVideoEnabled;
       localStream.current.getVideoTracks().forEach((track) => {
-        track.enabled = !track.enabled;
+        track.enabled = nextState;
       });
-      setIsVideoEnabled(!isVideoEnabled);
+      setIsVideoEnabled(nextState);
     }
   };
 
-  // Host functions
+  const toggleScreenShare = async () => {
+    if (!isScreenSharing) {
+      try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        screenStreamRef.current = stream;
+        const screenTrack = stream.getVideoTracks()[0];
+        
+        // Show local preview
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = stream;
+        }
+
+        // Replace track in peer connections
+        Object.values(peerConnections.current).forEach(pc => {
+          const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+          if (sender) {
+            sender.replaceTrack(screenTrack);
+          }
+        });
+
+        screenTrack.onended = () => {
+          stopScreenShare();
+        };
+
+        setIsScreenSharing(true);
+      } catch (err) {
+        console.error("Failed to share screen:", err);
+      }
+    } else {
+      stopScreenShare();
+    }
+  };
+
+  const stopScreenShare = () => {
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach(track => track.stop());
+      screenStreamRef.current = null;
+    }
+    
+    // Put back local video
+    if (localVideoRef.current && localStream.current) {
+      localVideoRef.current.srcObject = localStream.current;
+    }
+
+    const cameraTrack = localStream.current?.getVideoTracks()[0];
+    if (cameraTrack) {
+      Object.values(peerConnections.current).forEach(pc => {
+        const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+        if (sender) {
+          sender.replaceTrack(cameraTrack);
+        }
+      });
+    }
+    setIsScreenSharing(false);
+  };
+
+  // Host controls
   const handleKickUser = async (socketId) => {
     try {
       const userId = remoteUsers[socketId]?._id;
@@ -303,11 +506,26 @@ const VideoCall = () => {
     if (localStream.current) {
       localStream.current.getTracks().forEach((track) => track.stop());
     }
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach(track => track.stop());
+    }
     Object.values(peerConnections.current).forEach((pc) => pc.close());
     peerConnections.current = {};
+    if (animationFrameId.current) {
+      cancelAnimationFrame(animationFrameId.current);
+    }
   };
 
   const remoteUserIds = Object.keys(remoteStreams);
+  const totalTiles = 1 + remoteUserIds.length;
+
+  // Grid layout helper calculation
+  const getGridLayout = (tileCount) => {
+    if (tileCount === 1) return { gridTemplateColumns: '1fr', maxWidth: '850px' };
+    if (tileCount === 2) return { gridTemplateColumns: '1fr 1fr' };
+    if (tileCount <= 4) return { gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr' };
+    return { gridTemplateColumns: '1fr 1fr 1fr' };
+  };
 
   // Meeting timer component
   const MeetingTimer = ({ startTime }) => {
@@ -319,7 +537,7 @@ const VideoCall = () => {
       const calculateElapsed = () => {
         const now = new Date();
         const start = new Date(startTime);
-        return Math.floor((now - start) / 1000);
+        return Math.max(0, Math.floor((now - start) / 1000));
       };
 
       setElapsed(calculateElapsed());
@@ -340,99 +558,355 @@ const VideoCall = () => {
       return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
-    return <span className="timer-display">{formatTime(elapsed)}</span>;
+    return <span>{formatTime(elapsed)}</span>;
   };
 
   return (
     <div className="video-call">
-      <div className="video-header">
-        <h2>{room?.roomName}</h2>
-        <div className="meeting-timer">
-          <span className="timer-label">Meeting Time: </span>
-          <MeetingTimer startTime={meetingStartTime} />
-        </div>
-        <button onClick={leaveCall} className="leave-btn">Leave Room</button>
+      {/* Absolute top left overlay with room details */}
+      <div className="video-call-overlay-header">
+        <h2>{room?.roomName || 'Video Call'}</h2>
       </div>
 
-      {error && <div className="error-message">{error}</div>}
+      {error && <div className="error-message" style={{ position: 'absolute', top: '16px', right: '16px', zIndex: 100 }}>{error}</div>}
 
-      <div className="video-grid">
-        <div className="video-container local">
-          <video ref={localVideoRef} autoPlay muted playsInline />
-          <div className="participant-info">
-            <p className="participant-name">
-              {user?.username} {isHost && <span className="host-badge">Host</span>}
-            </p>
-            <div className="status-badges">
-              {isMutedByHost && <span className="muted-badge">🔇 Muted</span>}
-              {isVideoDisabledByHost && <span className="video-badge">📹 Off</span>}
-              {!isAudioEnabled && !isMutedByHost && <span className="self-muted-badge">🔇</span>}
-              {!isVideoEnabled && !isVideoDisabledByHost && <span className="self-video-badge">📹</span>}
-            </div>
-          </div>
-        </div>
-
-        {remoteUserIds.map((socketId) => (
-          <div key={socketId} className="video-container">
-            <video
-              ref={(el) => (remoteVideoRefs.current[socketId] = el)}
-              autoPlay
-              playsInline
-            />
-            <div className="participant-info">
-              <p className="participant-name">
-                {remoteUsers[socketId]?.username || `User ${socketId.slice(0, 6)}`}
-              </p>
-              {isHost && (
-                <div className="host-controls">
-                  <button
-                    onClick={() => handleKickUser(socketId)}
-                    className="kick-btn"
-                    title="Kick user"
-                  >
-                    🚫
-                  </button>
-                  <button
-                    onClick={() => handleMuteUser(socketId, true)}
-                    className="mute-btn"
-                    title="Mute user"
-                  >
-                    🔇
-                  </button>
-                  <button
-                    onClick={() => handleDisableVideo(socketId, true)}
-                    className="video-off-btn"
-                    title="Turn off camera"
-                  >
-                    📹
-                  </button>
+      <div className="video-call-main">
+        {/* Immersive Grid */}
+        <div className="video-grid-container">
+          <div className="video-grid" style={getGridLayout(totalTiles)}>
+            
+            {/* Local participant card */}
+            <div className={`video-container local ${speakingUsers['local'] ? 'active-speaker' : ''}`}>
+              <video ref={localVideoRef} autoPlay muted playsInline />
+              
+              {(!isVideoEnabled || isVideoDisabledByHost) && (
+                <div className="video-avatar-view">
+                  <div className="big-avatar">{user?.username ? user.username[0] : 'U'}</div>
                 </div>
               )}
+
+              <div className="participant-overlay-info">
+                <p className="participant-overlay-name">
+                  {user?.username} (You) {isHost && <span className="host-tag">Host</span>}
+                </p>
+                <div className="participant-overlay-status">
+                  {(!isAudioEnabled || isMutedByHost) && (
+                    <div className="status-badge-circle alert" title="Microphone muted">
+                      <span className="material-icons-outlined">mic_off</span>
+                    </div>
+                  )}
+                  {(!isVideoEnabled || isVideoDisabledByHost) && (
+                    <div className="status-badge-circle alert" title="Camera off">
+                      <span className="material-icons-outlined">videocam_off</span>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
+
+            {/* Remote participants cards */}
+            {remoteUserIds.map((socketId) => (
+              <div 
+                key={socketId} 
+                className={`video-container ${speakingUsers[socketId] ? 'active-speaker' : ''}`}
+              >
+                <video
+                  ref={(el) => (remoteVideoRefs.current[socketId] = el)}
+                  autoPlay
+                  playsInline
+                />
+                
+                {/* Visual Avatar fallback when remote video track is off */}
+                {(!remoteStreams[socketId] || remoteStreams[socketId].getVideoTracks().length === 0 || !remoteStreams[socketId].getVideoTracks()[0].enabled) && (
+                  <div className="video-avatar-view">
+                    <div className="big-avatar">
+                      {remoteUsers[socketId]?.username ? remoteUsers[socketId].username[0] : 'U'}
+                    </div>
+                  </div>
+                )}
+
+                {/* Host specific quick buttons on hover of tile */}
+                {isHost && (
+                  <div className="tile-hover-controls">
+                    <button
+                      onClick={() => handleMuteUser(socketId, true)}
+                      className="tile-control-btn"
+                      title="Mute participant"
+                    >
+                      <span className="material-icons-outlined">mic_off</span>
+                    </button>
+                    <button
+                      onClick={() => handleDisableVideo(socketId, true)}
+                      className="tile-control-btn"
+                      title="Turn off participant camera"
+                    >
+                      <span className="material-icons-outlined">videocam_off</span>
+                    </button>
+                    <button
+                      onClick={() => handleKickUser(socketId)}
+                      className="tile-control-btn kick"
+                      title="Kick user from room"
+                    >
+                      <span className="material-icons-outlined">person_remove</span>
+                    </button>
+                  </div>
+                )}
+
+                <div className="participant-overlay-info">
+                  <p className="participant-overlay-name">
+                    {remoteUsers[socketId]?.username || `User ${socketId.slice(0, 5)}`}
+                  </p>
+                  <div className="participant-overlay-status">
+                    {/* Remote audio tracks check */}
+                    {(!remoteStreams[socketId] || remoteStreams[socketId].getAudioTracks().length === 0 || !remoteStreams[socketId].getAudioTracks()[0].enabled) && (
+                      <div className="status-badge-circle alert" title="Participant muted">
+                        <span className="material-icons-outlined">mic_off</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+
           </div>
-        ))}
+        </div>
+
+        {/* Sliding Sidebar Drawer */}
+        {activePanel !== '' && (
+          <div className="side-drawer">
+            <div className="drawer-header">
+              <div className="drawer-tabs">
+                <button 
+                  onClick={() => setActivePanel('people')}
+                  className={`drawer-tab ${activePanel === 'people' ? 'active' : ''}`}
+                >
+                  People ({totalTiles})
+                </button>
+                <button 
+                  onClick={() => {
+                    setActivePanel('chat');
+                    setUnreadChatCount(0); // clear count
+                  }}
+                  className={`drawer-tab ${activePanel === 'chat' ? 'active' : ''}`}
+                >
+                  In-call messages
+                </button>
+              </div>
+              <button onClick={() => setActivePanel('')} className="modal-close-btn" style={{ color: 'var(--text-dark-secondary)' }}>
+                <span className="material-icons-outlined">close</span>
+              </button>
+            </div>
+
+            {/* People tab panel */}
+            {activePanel === 'people' && (
+              <div className="drawer-content">
+                <div className="participant-list">
+                  
+                  {/* Self list item */}
+                  <div className="participant-item">
+                    <div className="participant-item-avatar">
+                      {user?.username ? user.username[0] : 'U'}
+                    </div>
+                    <div className="participant-item-info">
+                      <span className="participant-item-name">{user?.username} (You)</span>
+                      <span className="participant-item-role">{isHost ? 'Meeting Host' : 'Participant'}</span>
+                    </div>
+                    <div className="participant-item-controls">
+                      <span className="material-icons-outlined" style={{ color: isAudioEnabled && !isMutedByHost ? '#8ab4f8' : 'var(--color-google-red)' }}>
+                        {isAudioEnabled && !isMutedByHost ? 'mic' : 'mic_off'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Remote attendees items */}
+                  {remoteUserIds.map((socketId) => {
+                    const isMuted = !remoteStreams[socketId] || remoteStreams[socketId].getAudioTracks().length === 0 || !remoteStreams[socketId].getAudioTracks()[0].enabled;
+                    const isVideoOff = !remoteStreams[socketId] || remoteStreams[socketId].getVideoTracks().length === 0 || !remoteStreams[socketId].getVideoTracks()[0].enabled;
+
+                    return (
+                      <div key={socketId} className="participant-item">
+                        <div className="participant-item-avatar">
+                          {remoteUsers[socketId]?.username ? remoteUsers[socketId].username[0] : 'U'}
+                        </div>
+                        <div className="participant-item-info">
+                          <span className="participant-item-name">{remoteUsers[socketId]?.username || `User ${socketId.slice(0, 5)}`}</span>
+                          <span className="participant-item-role">Participant</span>
+                        </div>
+                        <div className="participant-item-controls">
+                          
+                          {/* Host actions display directly in sidebar */}
+                          {isHost ? (
+                            <>
+                              <button 
+                                onClick={() => handleMuteUser(socketId, true)}
+                                className="drawer-control-btn"
+                                title="Mute user"
+                              >
+                                <span className="material-icons-outlined">{isMuted ? 'mic_off' : 'mic'}</span>
+                              </button>
+                              <button 
+                                onClick={() => handleDisableVideo(socketId, true)}
+                                className="drawer-control-btn"
+                                title="Turn off camera"
+                              >
+                                <span className="material-icons-outlined">{isVideoOff ? 'videocam_off' : 'videocam'}</span>
+                              </button>
+                              <button 
+                                onClick={() => handleKickUser(socketId)}
+                                className="drawer-control-btn alert"
+                                title="Remove user"
+                              >
+                                <span className="material-icons-outlined">person_remove</span>
+                              </button>
+                            </>
+                          ) : (
+                            <span className="material-icons-outlined" style={{ color: isMuted ? 'var(--color-google-red)' : 'var(--text-dark-secondary)' }}>
+                              {isMuted ? 'mic_off' : 'mic'}
+                            </span>
+                          )}
+
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                </div>
+              </div>
+            )}
+
+            {/* Chat tab panel */}
+            {activePanel === 'chat' && (
+              <div className="chat-tab-panel">
+                <div className="chat-messages-container">
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-dark-secondary)', textAlign: 'center', marginBottom: '8px' }}>
+                    Messages can only be seen by people in the call and are deleted when the call ends.
+                  </div>
+                  
+                  {chatMessages.map((msg, index) => {
+                    const isSelf = msg.senderId === 'self';
+                    const time = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+                    return (
+                      <div key={index} className={`chat-bubble ${isSelf ? 'self' : ''}`}>
+                        <div className="chat-bubble-header">
+                          <span className="chat-sender-name">{msg.sender}</span>
+                          <span className="chat-sender-time">{time}</span>
+                        </div>
+                        <div className="chat-message-text">
+                          {msg.message}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div ref={chatEndRef} />
+                </div>
+
+                <div className="chat-input-wrapper">
+                  <form onSubmit={handleSendChatMessage} className="chat-input-form">
+                    <input
+                      type="text"
+                      placeholder="Send a message to everyone"
+                      className="chat-input-field"
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                    />
+                    <button 
+                      type="submit" 
+                      className="chat-send-btn"
+                      disabled={!chatInput.trim()}
+                    >
+                      <span className="material-icons-outlined">send</span>
+                    </button>
+                  </form>
+                </div>
+              </div>
+            )}
+
+          </div>
+        )}
       </div>
 
-      <div className="video-controls">
-        <button
-          onClick={toggleAudio}
-          className={`control-btn toggle-btn ${isAudioEnabled && !isMutedByHost ? 'active' : 'inactive'}`}
-          disabled={isMutedByHost}
-        >
-          <span className="toggle-icon">{isAudioEnabled && !isMutedByHost ? '🎤' : '🔇'}</span>
-          <span className="toggle-label">{isAudioEnabled && !isMutedByHost ? 'Mic On' : 'Mic Off'}</span>
-        </button>
-        <button
-          onClick={toggleVideo}
-          className={`control-btn toggle-btn ${isVideoEnabled && !isVideoDisabledByHost ? 'active' : 'inactive'}`}
-          disabled={isVideoDisabledByHost}
-        >
-          <span className="toggle-icon">{isVideoEnabled && !isVideoDisabledByHost ? '📹' : '📷'}</span>
-          <span className="toggle-label">{isVideoEnabled && !isVideoDisabledByHost ? 'Video On' : 'Video Off'}</span>
-        </button>
-        <button onClick={leaveCall} className="control-btn leave">
-          📞 Leave
-        </button>
+      {/* Control Toolbar */}
+      <div className="video-control-bar">
+        {/* Left: Meeting Name & Time details */}
+        <div className="control-bar-left">
+          <div className="control-bar-time">{currentTimeStr}</div>
+          <div className="control-bar-code">{roomId}</div>
+        </div>
+
+        {/* Center: Device and meeting controls */}
+        <div className="control-bar-center">
+          <button 
+            onClick={toggleAudio} 
+            className={`circle-media-btn ${(!isAudioEnabled || isMutedByHost) ? 'off' : ''}`}
+            disabled={isMutedByHost}
+            title={isMutedByHost ? 'Muted by Host' : (isAudioEnabled ? 'Mute Microphone' : 'Unmute Microphone')}
+          >
+            <span className="material-icons-outlined">
+              {(!isAudioEnabled || isMutedByHost) ? 'mic_off' : 'mic'}
+            </span>
+          </button>
+
+          <button 
+            onClick={toggleVideo} 
+            className={`circle-media-btn ${(!isVideoEnabled || isVideoDisabledByHost) ? 'off' : ''}`}
+            disabled={isVideoDisabledByHost}
+            title={isVideoDisabledByHost ? 'Video disabled by Host' : (isVideoEnabled ? 'Turn off camera' : 'Turn on camera')}
+          >
+            <span className="material-icons-outlined">
+              {(!isVideoEnabled || isVideoDisabledByHost) ? 'videocam_off' : 'videocam'}
+            </span>
+          </button>
+
+          <button
+            onClick={toggleScreenShare}
+            className={`circle-media-btn ${isScreenSharing ? 'off' : ''}`}
+            title={isScreenSharing ? 'Stop presenting' : 'Present now (Share screen)'}
+          >
+            <span className="material-icons-outlined">
+              {isScreenSharing ? 'cancel_presentation' : 'present_to_all'}
+            </span>
+          </button>
+
+          <button onClick={leaveCall} className="hangup-pill-btn" title="Leave call">
+            <span className="material-icons-outlined">call_end</span>
+            Leave
+          </button>
+        </div>
+
+        {/* Right: Drawer toggle actions */}
+        <div className="control-bar-right">
+          <button 
+            onClick={() => setActivePanel(activePanel === 'people' ? '' : 'people')}
+            className={`panel-toggle-btn ${activePanel === 'people' ? 'active' : ''}`}
+            title="Show participants list"
+          >
+            <span className="material-icons-outlined">people_outline</span>
+            <span className="badge-count" style={{ backgroundColor: 'var(--border-dark-color)', color: '#fff' }}>
+              {totalTiles}
+            </span>
+          </button>
+
+          <button 
+            onClick={() => {
+              setActivePanel(activePanel === 'chat' ? '' : 'chat');
+              setUnreadChatCount(0); // clear count
+            }}
+            className={`panel-toggle-btn ${activePanel === 'chat' ? 'active' : ''}`}
+            title="In-call chat"
+          >
+            <span className="material-icons-outlined">chat_bubble_outline</span>
+            {unreadChatCount > 0 && (
+              <span className="badge-count">
+                {unreadChatCount}
+              </span>
+            )}
+          </button>
+
+          <div style={{ color: 'var(--text-dark-secondary)', fontSize: '0.85rem', marginLeft: '12px', borderLeft: '1px solid var(--border-dark-color)', paddingLeft: '16px' }}>
+            <MeetingTimer startTime={meetingStartTime} />
+          </div>
+        </div>
       </div>
     </div>
   );
