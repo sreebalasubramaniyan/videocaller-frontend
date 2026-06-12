@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getRooms, createRoom, joinRoom, deleteRoom } from '../services/api';
+import { socket } from '../services/socket';
 
 const Dashboard = () => {
   const { user, logout } = useAuth();
@@ -46,6 +47,38 @@ const Dashboard = () => {
   // Fetch rooms
   useEffect(() => {
     fetchRooms();
+  }, []);
+
+  // Listen for real-time room updates via Socket.io
+  useEffect(() => {
+    const handleRoomCreated = (newRoom) => {
+      setRooms((prev) => {
+        if (prev.some((r) => r.roomId === newRoom.roomId)) return prev;
+        return [newRoom, ...prev];
+      });
+    };
+
+    const handleRoomEnded = ({ roomId }) => {
+      setRooms((prev) => prev.filter((r) => r.roomId !== roomId));
+    };
+
+    const handleRoomUpdated = ({ roomId, participantCount }) => {
+      setRooms((prev) =>
+        prev.map((r) =>
+          r.roomId === roomId ? { ...r, participantCount } : r
+        )
+      );
+    };
+
+    socket.on('room-created', handleRoomCreated);
+    socket.on('room-ended', handleRoomEnded);
+    socket.on('room-updated', handleRoomUpdated);
+
+    return () => {
+      socket.off('room-created', handleRoomCreated);
+      socket.off('room-ended', handleRoomEnded);
+      socket.off('room-updated', handleRoomUpdated);
+    };
   }, []);
 
   // Click outside dropdown to close

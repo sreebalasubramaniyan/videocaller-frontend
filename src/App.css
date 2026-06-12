@@ -1434,8 +1434,13 @@
 }
 
 @media (max-width: 768px) {
+  .navbar-time,
+  .navbar-right > span {
+    display: none !important;
+  }
+  
   .navbar-right {
-    display: none; /* Hide date/time on small screens */
+    gap: 12px;
   }
 
   .video-call-main {
@@ -1466,4 +1471,98 @@
   .control-bar-right {
     width: auto;
   }
+
+  .video-grid {
+    grid-template-columns: 1fr !important;
+    grid-template-rows: auto !important;
+    max-height: none !important;
+    overflow-y: auto;
+    gap: 12px;
+  }
+
+  .video-grid.more-than-two {
+    grid-template-columns: 1fr 1fr !important;
+  }
+  
+  .video-container {
+    aspect-ratio: 16/9;
+    width: 100%;
+  }
+}
+
+/* Timer layout shaking fix */
+.control-bar-timer-wrapper span {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.5px;
+  min-width: 50px;
+  display: inline-block;
+  text-align: center;
+}
+
+/* Host global controls layout */
+.host-global-controls {
+  padding: 16px;
+  background-color: var(--bg-dark-secondary);
+  border-bottom: 1px solid var(--border-dark-color);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.host-global-group {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.host-global-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  border-radius: var(--border-radius-sm);
+  border: none;
+  cursor: pointer;
+  transition: var(--transition-normal);
+  color: #fff;
+  background-color: var(--bg-dark-tertiary);
+}
+
+.host-global-btn:hover {
+  filter: brightness(1.1);
+}
+
+.host-global-btn.alert {
+  background-color: var(--color-google-red);
+}
+.host-global-btn.alert:hover {
+  background-color: var(--color-google-red-hover);
+}
+
+.host-global-btn.success {
+  background-color: var(--color-google-green);
+}
+.host-global-btn.success:hover {
+  background-color: var(--color-google-green-hover);
+}
+
+.host-global-btn .material-icons-outlined {
+  font-size: 1rem;
+}
+
+/* Host tiles toggled state styling */
+.tile-control-btn.off {
+  background-color: var(--color-google-red);
+}
+
+.tile-control-btn.off:hover {
+  background-color: var(--color-google-red-hover);
+}
+
+.drawer-control-btn.off {
+  color: var(--color-google-red) !important;
 }

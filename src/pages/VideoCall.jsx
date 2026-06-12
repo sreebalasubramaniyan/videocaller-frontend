@@ -68,6 +68,7 @@ const VideoCall = () => {
   useEffect(() => {
     socket.on('user-connected', handleUserConnected);
     socket.on('user-disconnected', handleUserDisconnected);
+    socket.on('participants-list', handleParticipantsList);
     socket.on('offer', handleOffer);
     socket.on('answer', handleAnswer);
     socket.on('ice-candidate', handleIceCandidate);
@@ -82,6 +83,7 @@ const VideoCall = () => {
     return () => {
       socket.off('user-connected');
       socket.off('user-disconnected');
+      socket.off('participants-list');
       socket.off('offer');
       socket.off('answer');
       socket.off('ice-candidate');
@@ -270,10 +272,27 @@ const VideoCall = () => {
     removeAudioAnalyser(userId);
   };
 
-  const handleKicked = ({ roomId }) => {
+  const handleKicked = ({ roomId, reason }) => {
     cleanup();
     navigate('/dashboard');
-    alert('You have been removed from the room');
+    if (reason === 'ended') {
+      alert('meeting is ended by the host');
+    } else {
+      alert('you have been kicked by the host');
+    }
+  };
+
+  const handleParticipantsList = ({ participants }) => {
+    console.log('Received participants list:', participants);
+    setRemoteUsers(prev => {
+      const updated = { ...prev };
+      participants.forEach(p => {
+        if (p.socketId !== socket.id) {
+          updated[p.socketId] = { username: p.username, _id: p.userId };
+        }
+      });
+      return updated;
+    });
   };
 
   const handleUserKicked = ({ userId }) => {
@@ -294,6 +313,8 @@ const VideoCall = () => {
     setIsMutedByHost(isMuted);
     if (isMuted) {
       setIsAudioEnabled(false);
+    } else {
+      setIsAudioEnabled(true);
     }
   };
 
@@ -301,6 +322,30 @@ const VideoCall = () => {
     setIsVideoDisabledByHost(isDisabled);
     if (isDisabled) {
       setIsVideoEnabled(false);
+    } else {
+      setIsVideoEnabled(true);
+    }
+  };
+
+  const handleMuteAll = (isMuted) => {
+    muteUserSocket(roomId, 'all', isMuted);
+  };
+
+  const handleDisableVideoAll = (isDisabled) => {
+    disableVideoSocket(roomId, 'all', isDisabled);
+  };
+
+  const handleEndMeeting = async () => {
+    if (window.confirm('Are you sure you want to end this meeting for everyone?')) {
+      try {
+        await deleteRoom(roomId);
+        socket.emit('end-meeting', { roomId });
+        cleanup();
+        navigate('/dashboard');
+      } catch (err) {
+        console.error('Failed to end meeting:', err);
+        alert('Failed to end meeting.');
+      }
     }
   };
 
@@ -362,7 +407,13 @@ const VideoCall = () => {
   };
 
   const handleOffer = async ({ from, offer, username }) => {
-    console.log('Received offer from:', from);
+    console.log('Received offer from:', from, username);
+    if (username) {
+      setRemoteUsers(prev => ({
+        ...prev,
+        [from]: { ...prev[from], username }
+      }));
+    }
 
     const peerConnection = createPeerConnection(from);
     peerConnections.current[from] = peerConnection;
@@ -379,8 +430,14 @@ const VideoCall = () => {
     socket.emit('answer', { to: from, answer, username: user.username });
   };
 
-  const handleAnswer = async ({ from, answer }) => {
-    console.log('Received answer from:', from);
+  const handleAnswer = async ({ from, answer, username }) => {
+    console.log('Received answer from:', from, username);
+    if (username) {
+      setRemoteUsers(prev => ({
+        ...prev,
+        [from]: { ...prev[from], username }
+      }));
+    }
     const pc = peerConnections.current[from];
     if (pc) {
       await pc.setRemoteDescription(new RTCSessionDescription(answer));
@@ -573,7 +630,7 @@ const VideoCall = () => {
       <div className="video-call-main">
         {/* Immersive Grid */}
         <div className="video-grid-container">
-          <div className="video-grid" style={getGridLayout(totalTiles)}>
+          <div className={`video-grid ${totalTiles > 2 ? 'more-than-two' : ''}`} style={getGridLayout(totalTiles)}>
             
             {/* Local participant card */}
             <div className={`video-container local ${speakingUsers['local'] ? 'active-speaker' : ''}`}>
@@ -628,20 +685,33 @@ const VideoCall = () => {
                 {/* Host specific quick buttons on hover of tile */}
                 {isHost && (
                   <div className="tile-hover-controls">
-                    <button
-                      onClick={() => handleMuteUser(socketId, true)}
-                      className="tile-control-btn"
-                      title="Mute participant"
-                    >
-                      <span className="material-icons-outlined">mic_off</span>
-                    </button>
-                    <button
-                      onClick={() => handleDisableVideo(socketId, true)}
-                      className="tile-control-btn"
-                      title="Turn off participant camera"
-                    >
-                      <span className="material-icons-outlined">videocam_off</span>
-                    </button>
+                    {(() => {
+                      const isMuted = !remoteStreams[socketId] || remoteStreams[socketId].getAudioTracks().length === 0 || !remoteStreams[socketId].getAudioTracks()[0].enabled;
+                      const isVideoOff = !remoteStreams[socketId] || remoteStreams[socketId].getVideoTracks().length === 0 || !remoteStreams[socketId].getVideoTracks()[0].enabled;
+                      
+                      return (
+                        <>
+                          <button
+                            onClick={() => handleMuteUser(socketId, !isMuted)}
+                            className={`tile-control-btn ${isMuted ? 'off' : ''}`}
+                            title={isMuted ? 'Unmute participant' : 'Mute participant'}
+                          >
+                            <span className="material-icons-outlined">
+                              {isMuted ? 'mic_off' : 'mic'}
+                            </span>
+                          </button>
+                          <button
+                            onClick={() => handleDisableVideo(socketId, !isVideoOff)}
+                            className={`tile-control-btn ${isVideoOff ? 'off' : ''}`}
+                            title={isVideoOff ? 'Turn on participant camera' : 'Turn off participant camera'}
+                          >
+                            <span className="material-icons-outlined">
+                              {isVideoOff ? 'videocam_off' : 'videocam'}
+                            </span>
+                          </button>
+                        </>
+                      );
+                    })()}
                     <button
                       onClick={() => handleKickUser(socketId)}
                       className="tile-control-btn kick"
@@ -700,6 +770,26 @@ const VideoCall = () => {
             {/* People tab panel */}
             {activePanel === 'people' && (
               <div className="drawer-content">
+                {isHost && (
+                  <div className="host-global-controls">
+                    <div className="host-global-group">
+                      <button onClick={() => handleMuteAll(true)} className="host-global-btn alert" title="Mute all participants">
+                        <span className="material-icons-outlined">mic_off</span> Mute All
+                      </button>
+                      <button onClick={() => handleMuteAll(false)} className="host-global-btn success" title="Unmute all participants">
+                        <span className="material-icons-outlined">mic</span> Unmute All
+                      </button>
+                    </div>
+                    <div className="host-global-group" style={{ marginTop: '8px' }}>
+                      <button onClick={() => handleDisableVideoAll(true)} className="host-global-btn alert" title="Turn off all cameras">
+                        <span className="material-icons-outlined">videocam_off</span> Disable All Video
+                      </button>
+                      <button onClick={() => handleDisableVideoAll(false)} className="host-global-btn success" title="Turn on all cameras">
+                        <span className="material-icons-outlined">videocam</span> Enable All Video
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <div className="participant-list">
                   
                   {/* Self list item */}
@@ -738,16 +828,16 @@ const VideoCall = () => {
                           {isHost ? (
                             <>
                               <button 
-                                onClick={() => handleMuteUser(socketId, true)}
-                                className="drawer-control-btn"
-                                title="Mute user"
+                                onClick={() => handleMuteUser(socketId, !isMuted)}
+                                className={`drawer-control-btn ${isMuted ? 'off' : ''}`}
+                                title={isMuted ? 'Unmute user' : 'Mute user'}
                               >
                                 <span className="material-icons-outlined">{isMuted ? 'mic_off' : 'mic'}</span>
                               </button>
                               <button 
-                                onClick={() => handleDisableVideo(socketId, true)}
-                                className="drawer-control-btn"
-                                title="Turn off camera"
+                                onClick={() => handleDisableVideo(socketId, !isVideoOff)}
+                                className={`drawer-control-btn ${isVideoOff ? 'off' : ''}`}
+                                title={isVideoOff ? 'Turn on camera' : 'Turn off camera'}
                               >
                                 <span className="material-icons-outlined">{isVideoOff ? 'videocam_off' : 'videocam'}</span>
                               </button>
@@ -868,10 +958,17 @@ const VideoCall = () => {
             </span>
           </button>
 
-          <button onClick={leaveCall} className="hangup-pill-btn" title="Leave call">
-            <span className="material-icons-outlined">call_end</span>
-            Leave
-          </button>
+          {isHost ? (
+            <button onClick={handleEndMeeting} className="hangup-pill-btn host-end-btn" title="End Meeting for everyone">
+              <span className="material-icons-outlined">call_end</span>
+              End Meeting
+            </button>
+          ) : (
+            <button onClick={leaveCall} className="hangup-pill-btn" title="Leave call">
+              <span className="material-icons-outlined">call_end</span>
+              Leave
+            </button>
+          )}
         </div>
 
         {/* Right: Drawer toggle actions */}
@@ -903,7 +1000,7 @@ const VideoCall = () => {
             )}
           </button>
 
-          <div style={{ color: 'var(--text-dark-secondary)', fontSize: '0.85rem', marginLeft: '12px', borderLeft: '1px solid var(--border-dark-color)', paddingLeft: '16px' }}>
+          <div className="control-bar-timer-wrapper" style={{ color: 'var(--text-dark-secondary)', fontSize: '0.85rem', marginLeft: '12px', borderLeft: '1px solid var(--border-dark-color)', paddingLeft: '16px' }}>
             <MeetingTimer startTime={meetingStartTime} />
           </div>
         </div>
